@@ -1,0 +1,132 @@
+/* ── Reset & base ─────────────────────────────────────────────────────────── */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: #000;
+  color: #fff;
+  font-family: 'Courier New', Courier, monospace;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+}
+
+/* ── Config Panel ─────────────────────────────────────────────────────────── */
+#config-panel {
+  background: #111;
+  border: 2px solid #1919a6;
+  border-radius: 8px;
+  padding: 32px 40px;
+  width: 380px;
+  text-align: center;
+}
+
+#config-panel h1 {
+  font-size: 2.6rem;
+  color: #ffe000;
+  letter-spacing: 8px;
+  margin-bottom: 4px;
+}
+
+#config-panel h2 {
+  font-size: 0.8rem;
+  color: #666;
+  letter-spacing: 3px;
+  text-transform: uppercase;
+  margin-bottom: 28px;
+}
+
+.control-group {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+  gap: 12px;
+}
+
+.control-group label {
+  font-size: 0.85rem;
+  color: #ccc;
+  text-align: left;
+  flex: 1;
+}
+
+.control-group .range {
+  color: #555;
+  font-size: 0.72rem;
+}
+
+/* Number inputs */
+.control-group input[type="number"] {
+  width: 64px;
+  background: #222;
+  border: 1px solid #444;
+  border-radius: 4px;
+  color: #fff;
+  font-family: inherit;
+  font-size: 0.9rem;
+  padding: 4px 8px;
+  text-align: center;
+}
+
+/* Range sliders */
+.control-group input[type="range"] {
+  flex: 1;
+  accent-color: #1919a6;
+  cursor: pointer;
+}
+
+/* Slider value badge */
+.control-group span {
+  font-size: 0.85rem;
+  color: #ffe000;
+  min-width: 38px;
+  text-align: right;
+}
+
+/* Checkbox row */
+.checkbox-group {
+  justify-content: flex-start;
+  gap: 16px;
+}
+
+.checkbox-group input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  accent-color: #ffe000;
+  cursor: pointer;
+}
+
+/* Start button */
+#start-btn {
+  margin-top: 24px;
+  width: 100%;
+  padding: 12px;
+  background: #1919a6;
+  border: none;
+  border-radius: 6px;
+  color: #fff;
+  font-family: inherit;
+  font-size: 1rem;
+  letter-spacing: 3px;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+#start-btn:hover {
+  background: #2525d4;
+}
+
+/* ── Game Container ───────────────────────────────────────────────────────── */
+#game-container {
+  display: none; /* shown by startGame() */
+}
+
+#game-container canvas {
+  display: block;
+}
