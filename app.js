@@ -24,74 +24,49 @@ const TILE = {
 // =============================================================================
 // TILEMAP  (28 columns × 31 rows)
 //
+// Accurate classic Pac-Man layout (Namco, 1980)
+// 240 dots + 4 power pellets = 244 collectibles
+//
 //  0 = wall            solid blue block, impassable
 //  1 = dot             small collectible pellet
 //  2 = power pellet    large collectible, makes ghosts frightened
 //  3 = empty           open corridor, no item
 //  4 = ghost house     ghost starting area interior
 // =============================================================================
+// Accurate classic Pac-Man tilemap - 28 columns x 31 rows
+// Mapped tile-by-tile from the original 1980 Namco arcade maze
+// 0=wall, 1=dot, 2=power pellet, 3=empty, 4=ghost house
 const TILEMAP = [
-  // Row 0 – top border wall
   [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
-  // Row 1 – top corridor (dots span both halves)
   [0,1,1,1,1,1,1,1,1,1,1,1,1,0,0,1,1,1,1,1,1,1,1,1,1,1,1,0],
-  // Row 2 – upper left and right box walls
   [0,1,0,0,0,0,1,0,0,0,0,0,1,0,0,1,0,0,0,0,0,1,0,0,0,0,1,0],
-  // Row 3 – POWER PELLETS at cols 1 and 26
   [0,2,0,0,0,0,1,0,0,0,0,0,1,0,0,1,0,0,0,0,0,1,0,0,0,0,2,0],
-  // Row 4
   [0,1,0,0,0,0,1,0,0,0,0,0,1,0,0,1,0,0,0,0,0,1,0,0,0,0,1,0],
-  // Row 5 – full-width horizontal corridor
   [0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0],
-  // Row 6 – T-junctions at cols 6 and 21
   [0,1,0,0,0,0,1,0,0,1,0,0,0,0,0,0,0,0,1,0,0,1,0,0,0,0,1,0],
-  // Row 7
   [0,1,0,0,0,0,1,0,0,1,0,0,0,0,0,0,0,0,1,0,0,1,0,0,0,0,1,0],
-  // Row 8 – horizontal bars with gap above ghost house approach
   [0,1,1,1,1,1,1,0,0,1,1,1,1,0,0,1,1,1,1,0,0,1,1,1,1,1,1,0],
-  // Row 9 – vertical connectors at col 6 and 21; corridor narrows
   [0,0,0,0,0,0,1,0,0,0,0,0,3,0,0,3,0,0,0,0,0,1,0,0,0,0,0,0],
-  // Row 10
-  [0,0,0,0,0,0,1,0,0,0,0,0,3,0,0,3,0,0,0,0,0,1,0,0,0,0,0,0],
-  // Row 11 – horizontal corridor directly above ghost house
-  [0,0,0,0,0,0,1,0,0,3,3,3,3,3,3,3,3,3,3,0,0,1,0,0,0,0,0,0],
-  // Row 12 – ghost house top wall; door opening at cols 13–14
-  [0,0,0,0,0,0,1,0,0,3,0,0,0,3,3,0,0,0,3,0,0,1,0,0,0,0,0,0],
-  // Row 13 – TUNNEL exits at cols 0–5 and 22–27; ghost house interior
-  [3,3,3,3,3,3,1,3,3,3,0,4,4,4,4,4,4,0,3,3,3,1,3,3,3,3,3,3],
-  // Row 14 – ghost house interior (second row)
+  [3,3,3,3,3,0,1,0,0,0,0,0,3,0,0,3,0,0,0,0,0,1,0,3,3,3,3,3],
+  [3,3,3,3,3,0,1,0,0,3,3,3,3,3,3,3,3,3,3,0,0,1,0,3,3,3,3,3],
+  [3,3,3,3,3,0,1,0,0,3,0,0,0,3,3,0,0,0,3,0,0,1,0,3,3,3,3,3],
   [0,0,0,0,0,0,1,0,0,3,0,4,4,4,4,4,4,0,3,0,0,1,0,0,0,0,0,0],
-  // Row 15 – corridor below ghost house
-  [0,0,0,0,0,0,1,0,0,3,3,3,3,3,3,3,3,3,3,0,0,1,0,0,0,0,0,0],
-  // Row 16
+  [3,3,3,3,3,3,1,3,3,3,0,4,4,4,4,4,4,0,3,3,3,1,3,3,3,3,3,3],
+  [0,0,0,0,0,0,1,0,0,3,0,4,4,4,4,4,4,0,3,0,0,1,0,0,0,0,0,0],
+  [3,3,3,3,3,0,1,0,0,3,0,0,0,0,0,0,0,0,3,0,0,1,0,3,3,3,3,3],
+  [3,3,3,3,3,0,1,0,0,3,3,3,3,3,3,3,3,3,3,0,0,1,0,3,3,3,3,3],
+  [3,3,3,3,3,0,1,0,0,3,0,0,0,0,0,0,0,0,3,0,0,1,0,3,3,3,3,3],
   [0,0,0,0,0,0,1,0,0,3,0,0,0,0,0,0,0,0,3,0,0,1,0,0,0,0,0,0],
-  // Row 17 – horizontal corridor below ghost house
-  [0,0,0,0,0,0,1,0,0,3,3,3,3,3,3,3,3,3,3,0,0,1,0,0,0,0,0,0],
-  // Row 18 – lower half begins; mirrors row 1
   [0,1,1,1,1,1,1,1,1,1,1,1,1,0,0,1,1,1,1,1,1,1,1,1,1,1,1,0],
-  // Row 19
   [0,1,0,0,0,0,1,0,0,0,0,0,1,0,0,1,0,0,0,0,0,1,0,0,0,0,1,0],
-  // Row 20 – POWER PELLETS at cols 1 and 26
-  [0,2,0,0,0,0,1,0,0,0,0,0,1,0,0,1,0,0,0,0,0,1,0,0,0,0,2,0],
-  // Row 21 – Pac-Man start area; cols 13–14 are empty (no dot under spawn)
-  [0,1,1,1,0,0,1,1,1,1,1,1,1,3,3,1,1,1,1,1,1,1,0,0,1,1,1,0],
-  // Row 22 – vertical connectors at cols 3, 6, 9, 18, 21, 24
+  [0,1,0,0,0,0,1,0,0,0,0,0,1,0,0,1,0,0,0,0,0,1,0,0,0,0,1,0],
+  [0,2,1,1,0,0,1,1,1,1,1,1,1,3,3,1,1,1,1,1,1,1,0,0,1,1,2,0],
   [0,0,0,1,0,0,1,0,0,1,0,0,0,0,0,0,0,0,1,0,0,1,0,0,1,0,0,0],
-  // Row 23
   [0,0,0,1,0,0,1,0,0,1,0,0,0,0,0,0,0,0,1,0,0,1,0,0,1,0,0,0],
-  // Row 24 – horizontal bars below Pac-Man area
-  [0,1,1,1,1,1,1,0,0,1,1,1,1,0,3,1,1,1,1,0,0,1,1,1,1,1,1,0],
-  // Row 25 – large open area (Pac-Man starting room)
-  [0,1,0,0,0,0,0,0,0,0,0,0,1,0,3,1,0,0,0,0,0,0,0,0,0,0,1,0],
-  // Row 26
-  [0,1,0,0,0,0,0,0,0,0,0,0,1,0,3,1,0,0,0,0,0,0,0,0,0,0,1,0],
-  // Row 27 – wide bottom horizontal corridor
+  [0,1,1,1,1,1,1,0,0,1,1,1,1,0,0,1,1,1,1,0,0,1,1,1,1,1,1,0],
+  [0,1,0,0,0,0,0,0,0,0,0,0,1,0,0,1,0,0,0,0,0,0,0,0,0,0,1,0],
+  [0,1,0,0,0,0,0,0,0,0,0,0,1,0,0,1,0,0,0,0,0,0,0,0,0,0,1,0],
   [0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0],
-  // Row 28 – two vertical corridors separated by center gap
-  [0,1,0,0,0,0,1,0,0,0,0,0,0,0,3,0,0,0,0,0,0,1,0,0,0,0,1,0],
-  // Row 29 – bottom corridor
-  [0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0],
-  // Row 30 – bottom border wall
   [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
 ];
 
@@ -113,14 +88,58 @@ class GameScene extends Phaser.Scene {
   // create – called once when the scene starts; draws the static maze
   // ---------------------------------------------------------------------------
   create() {
-    // A single Graphics object is used for all tile drawing.
-    // Phaser batches fill calls so this stays efficient.
     const gfx = this.add.graphics();
+    const PATH_SIZE = 35;  // black squares on path tiles, larger than TILE_SIZE
+    const pathOffset = (PATH_SIZE - TILE_SIZE) / 2;  // 2.5px overhang on each side
 
-    // Iterate every cell in the tilemap and draw the appropriate graphic
+    // --- Layer 1: Draw all wall tiles as solid blue 20×20 blocks ---
+    gfx.fillStyle(0x1919a6, 1);
     for (let row = 0; row < ROWS; row++) {
       for (let col = 0; col < COLS; col++) {
-        this._drawTile(gfx, row, col, TILEMAP[row][col]);
+        if (TILEMAP[row][col] === TILE.WALL) {
+          const x = col * TILE_SIZE;
+          const y = HUD_HEIGHT + row * TILE_SIZE;
+          gfx.fillRect(x, y, TILE_SIZE, TILE_SIZE);
+        }
+      }
+    }
+
+    // --- Layer 2: Draw 25×25 black squares on every non-wall tile ---
+    // These carve into adjacent wall tiles, making corridors wider.
+    gfx.fillStyle(0x000000, 1);
+    for (let row = 0; row < ROWS; row++) {
+      for (let col = 0; col < COLS; col++) {
+        if (TILEMAP[row][col] !== TILE.WALL) {
+          const x = col * TILE_SIZE;
+          const y = HUD_HEIGHT + row * TILE_SIZE;
+          gfx.fillRect(x - pathOffset, y - pathOffset, PATH_SIZE, PATH_SIZE);
+        }
+      }
+    }
+
+    // --- Layer 3: Draw dots, pellets, ghost house on top ---
+    for (let row = 0; row < ROWS; row++) {
+      for (let col = 0; col < COLS; col++) {
+        const type = TILEMAP[row][col];
+        const x  = col * TILE_SIZE;
+        const y  = HUD_HEIGHT + row * TILE_SIZE;
+        const cx = x + TILE_SIZE / 2;
+        const cy = y + TILE_SIZE / 2;
+
+        switch (type) {
+          case TILE.DOT:
+            gfx.fillStyle(0xffb8ae, 1);
+            gfx.fillCircle(cx, cy, 2);
+            break;
+          case TILE.PELLET:
+            gfx.fillStyle(0xffffff, 1);
+            gfx.fillCircle(cx, cy, 5);
+            break;
+          case TILE.GHOST_HOUSE:
+            gfx.fillStyle(0x200030, 1);
+            gfx.fillRect(x, y, TILE_SIZE, TILE_SIZE);
+            break;
+        }
       }
     }
 
@@ -150,10 +169,8 @@ class GameScene extends Phaser.Scene {
     switch (type) {
 
       case TILE.WALL:
-        // Dark-blue block; 1 px inset reveals the black background as a thin
-        // gap between adjacent walls, giving a subtle grid / outline effect
         gfx.fillStyle(0x1919a6, 1);
-        gfx.fillRect(x + 1, y + 1, TILE_SIZE - 2, TILE_SIZE - 2);
+        gfx.fillRect(x, y, TILE_SIZE, TILE_SIZE);
         break;
 
       case TILE.DOT:
