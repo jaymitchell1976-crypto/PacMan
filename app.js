@@ -89,7 +89,7 @@ class GameScene extends Phaser.Scene {
   // physics sprite can swap between them for mouth animation.
   // ---------------------------------------------------------------------------
   preload() {
-    const size = TILE_SIZE;
+    const size = 30;
     const r    = size / 2 - 1;
 
     // pac_open: pie-slice with ~23° mouth opening on each side
@@ -146,7 +146,10 @@ class GameScene extends Phaser.Scene {
       }
     }
 
-    // --- Layer 3: Draw dots, pellets, ghost house on top ---
+    // --- Layer 3: Ghost house drawn in gfx; dots/pellets as individual
+    //     destroyable circle objects stored in this.dotSprites ---
+    this.dotSprites = new Map(); // key: "row,col" → Phaser Arc game object
+
     for (let row = 0; row < ROWS; row++) {
       for (let col = 0; col < COLS; col++) {
         const type = TILEMAP[row][col];
@@ -156,14 +159,16 @@ class GameScene extends Phaser.Scene {
         const cy = y + TILE_SIZE / 2;
 
         switch (type) {
-          case TILE.DOT:
-            gfx.fillStyle(0xffb8ae, 1);
-            gfx.fillCircle(cx, cy, 2);
+          case TILE.DOT: {
+            const dot = this.add.circle(cx, cy, 2, 0xffb8ae);
+            this.dotSprites.set(`${row},${col}`, dot);
             break;
-          case TILE.PELLET:
-            gfx.fillStyle(0xffffff, 1);
-            gfx.fillCircle(cx, cy, 5);
+          }
+          case TILE.PELLET: {
+            const pellet = this.add.circle(cx, cy, 5, 0xffffff);
+            this.dotSprites.set(`${row},${col}`, pellet);
             break;
+          }
           case TILE.GHOST_HOUSE:
             gfx.fillStyle(0x200030, 1);
             gfx.fillRect(x, y, TILE_SIZE, TILE_SIZE);
@@ -175,6 +180,9 @@ class GameScene extends Phaser.Scene {
     // Pac-Man sprite and keyboard input
     this._createPacman();
     this._setupInput();
+
+    // Score counter — starts at zero, updated by _checkEatDot each frame
+    this.score = 0;
 
     // HUD – score display in the top strip above the maze (added last so it
     // renders on top of everything including Pac-Man)
@@ -235,6 +243,7 @@ class GameScene extends Phaser.Scene {
   // ---------------------------------------------------------------------------
   update(time, delta) {
     this._handleMovement();
+    this._checkEatDot();
     this._updatePacVisual(time);
   }
 
@@ -406,6 +415,41 @@ class GameScene extends Phaser.Scene {
     else if (this.pacDir.dx === -1) this.pac.setAngle(180);
     else if (this.pacDir.dy === -1) this.pac.setAngle(270);
     else if (this.pacDir.dy ===  1) this.pac.setAngle(90);
+  }
+
+  // ---------------------------------------------------------------------------
+  // _checkEatDot – called every frame; derives Pac-Man's current tile from his
+  //   pixel position and checks whether it holds a dot (type 1) or power pellet
+  //   (type 2).  If so:
+  //     • the corresponding Arc sprite is destroyed and removed from dotSprites
+  //     • TILEMAP is updated to TILE.EMPTY so the tile cannot be re-eaten
+  //     • score is incremented (10 for dot, 50 for pellet) and scoreText synced
+  // ---------------------------------------------------------------------------
+  _checkEatDot() {
+    // Convert Pac-Man's pixel centre to tile coordinates
+    const col = Math.floor(this.pac.x / TILE_SIZE);
+    const row = Math.floor((this.pac.y - HUD_HEIGHT) / TILE_SIZE);
+
+    // Skip if off-grid (e.g. inside the tunnel exit regions)
+    if (row < 0 || row >= ROWS || col < 0 || col >= COLS) return;
+
+    const type = TILEMAP[row][col];
+    if (type !== TILE.DOT && type !== TILE.PELLET) return;
+
+    // Destroy the individual dot/pellet sprite
+    const key    = `${row},${col}`;
+    const sprite = this.dotSprites.get(key);
+    if (sprite) {
+      sprite.destroy();
+      this.dotSprites.delete(key);
+    }
+
+    // Mark tile empty so it cannot be eaten again this session
+    TILEMAP[row][col] = TILE.EMPTY;
+
+    // Award points and refresh the HUD
+    this.score += (type === TILE.PELLET) ? 50 : 10;
+    this.scoreText.setText('SCORE  ' + this.score);
   }
 }
 
