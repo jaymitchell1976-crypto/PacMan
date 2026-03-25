@@ -1182,6 +1182,28 @@ class GameScene extends Phaser.Scene {
     if (type === TILE.PELLET) {
       this._activateFrightened(this.time.now);
     }
+
+    // Win condition — all dots and pellets cleared
+    if (this.dotSprites.size === 0) {
+      this._handleWin();
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // _handleWin – called the moment the last dot/pellet is eaten.
+  //   Freezes the update loop (same flag as death), stops Pac-Man, then after
+  //   a 1-second pause transitions to GameOverScene with won: true.
+  // ---------------------------------------------------------------------------
+  _handleWin() {
+    this.dying = true;  // freeze update loop — reuses death flag, no extra state
+
+    this.pac.setVelocity(0, 0);
+    this.pacDir    = { dx: 0, dy: 0 };
+    this.queuedDir = null;
+
+    this.time.delayedCall(1000, () => {
+      this.scene.start('GameOverScene', { score: this.score, won: true });
+    });
   }
 }
 
@@ -1200,6 +1222,7 @@ class GameOverScene extends Phaser.Scene {
   // ---------------------------------------------------------------------------
   init(data) {
     this.finalScore = data.score ?? 0;
+    this.won        = data.won   ?? false;
   }
 
   // ---------------------------------------------------------------------------
@@ -1213,10 +1236,12 @@ class GameOverScene extends Phaser.Scene {
     const cx = (COLS * TILE_SIZE) / 2;
     const cy = (HUD_HEIGHT + ROWS * TILE_SIZE) / 2;
 
-    // "GAME OVER" heading
-    this.add.text(cx, cy - 60, 'GAME OVER', {
+    // Heading — "YOU WIN!" or "GAME OVER" depending on outcome
+    const headingText  = this.won ? 'YOU WIN!'  : 'GAME OVER';
+    const headingColor = this.won ? '#00ff00'   : '#ff0000';
+    this.add.text(cx, cy - 60, headingText, {
       fontSize:   '40px',
-      color:      '#ff0000',
+      color:      headingColor,
       fontFamily: 'monospace',
       fontStyle:  'bold',
     }).setOrigin(0.5);
