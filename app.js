@@ -24,6 +24,12 @@ const SCATTER_DURATION = 7000;
 /** Chase phase duration in ms — classic Level 1 timing */
 const CHASE_DURATION = 20000;
 
+/** How long frightened mode lasts after a power pellet — classic Level 1 */
+const FRIGHTENED_DURATION = 7000;
+
+/** How many ms before frightened ends the ghost starts flashing blue ↔ white */
+const FRIGHTENED_FLASH_START = 2000;
+
 /** Tile type identifiers — used throughout all scenes */
 const TILE = {
   WALL:        0,
@@ -145,6 +151,17 @@ class GameScene extends Phaser.Scene {
       this._drawGhostTexture(gctx, gd.color, size);
       gc.refresh();
     }
+
+    // Frightened ghost textures — shared by all ghosts during frightened mode.
+    // ghost_frightened: solid blue body (normal frightened)
+    // ghost_flash:      white body (used during the end-of-frightened flash)
+    const gf  = this.textures.createCanvas('ghost_frightened', size, size);
+    this._drawGhostTexture(gf.getContext(), '#0000cc', size);
+    gf.refresh();
+
+    const gfl = this.textures.createCanvas('ghost_flash', size, size);
+    this._drawGhostTexture(gfl.getContext(), '#ffffff', size);
+    gfl.refresh();
   }
 
   // ---------------------------------------------------------------------------
@@ -311,6 +328,18 @@ class GameScene extends Phaser.Scene {
     // Death flag — while true the update loop is frozen (1-second respawn pause)
     this.dying = false;
 
+    // Frightened mode state — activated when Pac-Man eats a power pellet.
+    // isFrightened:      true while any ghost is in frightened mode
+    // frightenedEndTime: absolute scene timestamp when frightened mode expires
+    // frightenedTimer:   Phaser TimerEvent handle so re-eating a pellet can
+    //                    cancel and replace the running timer
+    // ghostEatMultiplier: doubles with each ghost eaten this frightened cycle
+    //                     (200 → 400 → 800 → 1600), reset each new activation
+    this.isFrightened       = false;
+    this.frightenedEndTime  = 0;
+    this.frightenedTimer    = null;
+    this.ghostEatMultiplier = 1;
+
     // HUD – score display in the top strip above the maze (added last so it
     // renders on top of everything including Pac-Man)
     this.scoreText = this.add.text(10, 10, 'SCORE  0', {
@@ -385,6 +414,7 @@ class GameScene extends Phaser.Scene {
     this._updatePacVisual(time);
     this._updateGhostMode(time);
     this._updateGhosts(time, delta);
+    this._updateGhostVisuals(time);
     this._checkGhostCollision();
   }
 
@@ -615,6 +645,9 @@ class GameScene extends Phaser.Scene {
         // Stored so resetPositions() can teleport ghosts back to their origins
         startRow:      def.startRow,
         startCol:      def.startCol,
+        // baseSpeed is the non-frightened speed; ghost.speed is halved during
+        // frightened mode and restored to baseSpeed when frightened ends
+        baseSpeed:     ghostSpeed,
       };
     });
 
@@ -648,7 +681,9 @@ class GameScene extends Phaser.Scene {
     this.ghostMode     = this.ghostMode === 'scatter' ? 'chase' : 'scatter';
     this.modeStartTime = time;
 
-    // Propagate new mode to ghosts already moving in the maze
+    // Propagate new mode to ghosts already moving in the maze.
+    // Frightened ghosts are left alone — they will rejoin the correct mode
+    // naturally when _endFrightened() fires.
     for (const ghost of this.ghosts) {
       if (ghost.state === 'scatter' || ghost.state === 'chase') {
         ghost.state = this.ghostMode;
@@ -733,9 +768,8 @@ class GameScene extends Phaser.Scene {
   //   _chooseDirToward with the mode-appropriate target tile.
   // ---------------------------------------------------------------------------
   _chooseNextGhostDir(ghost) {
-    if (ghost.state === 'exiting') {
-      return this._exitingDir(ghost);
-    }
+    if (ghost.state === 'exiting')   return this._exitingDir(ghost);
+    if (ghost.state === 'frightened') return this._chooseFrightenedDir(ghost);
     const target = this._getGhostTarget(ghost);
     return this._chooseDirToward(ghost, target.row, target.col);
   }
@@ -835,6 +869,164 @@ class GameScene extends Phaser.Scene {
   }
 
   // ---------------------------------------------------------------------------
+  // _activateFrightened – called when Pac-Man eats a power pellet.
+  //   Switches all active maze ghosts (scatter/chase) to 'frightened' state,
+  //   halves their speed, and schedules _endFrightened after FRIGHTENED_DURATION.
+  //   If frightened mode is already active (player ate a second pellet quickly),
+  //   the existing timer is cancelled and the full duration restarts.
+  //
+  //   @param {number} now  Current scene timestamp in ms
+  // ---------------------------------------------------------------------------
+  _activateFrightened(now) {
+    // Cancel the previous timer if frightened mode is already running
+    if (this.frightenedTimer) {
+      this.frightenedTimer.remove(false);
+      this.frightenedTimer = null;
+    }
+
+    this.isFrightened      = true;
+    this.frightenedEndTime = now + FRIGHTENED_DURATION;
+    this.ghostEatMultiplier = 1;  // reset score multiplier for this cycle
+
+    for (const ghost of this.ghosts) {
+      if (ghost.state === 'scatter' || ghost.state === 'chase') {
+        ghost.state = 'frightened';
+        ghost.speed = ghost.baseSpeed * 0.5;
+      }
+    }
+
+    // Schedule the automatic end of frightened mode
+    this.frightenedTimer = this.time.delayedCall(
+      FRIGHTENED_DURATION,
+      () => { this._endFrightened(); },
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // _endFrightened – restores all frightened ghosts to the current global mode
+  //   (scatter or chase) and resets their speed.  Safe to call at any time,
+  //   including mid-game death/respawn — it's a no-op if not currently active.
+  // ---------------------------------------------------------------------------
+  _endFrightened() {
+    // Cancel a pending timer (e.g. called early by resetPositions)
+    if (this.frightenedTimer) {
+      this.frightenedTimer.remove(false);
+      this.frightenedTimer = null;
+    }
+
+    this.isFrightened = false;
+
+    for (const ghost of this.ghosts) {
+      if (ghost.state === 'frightened') {
+        ghost.state = this.ghostMode;   // rejoin whichever phase the cycle is in
+        ghost.speed = ghost.baseSpeed;
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // _chooseFrightenedDir – picks a random valid direction for a frightened ghost.
+  //   Applies the same passability rules as normal movement (no walls, no ghost
+  //   house) but ignores all targeting — pure random choice from open exits.
+  //   180° reversal is still forbidden unless it is the only exit, matching the
+  //   classic arcade behaviour.
+  //
+  //   @param  {object} ghost  Ghost state object
+  //   @return {object|null}   { dx, dy } direction, or null if completely stuck
+  // ---------------------------------------------------------------------------
+  _chooseFrightenedDir(ghost) {
+    const DIRS = [
+      { dx:  0, dy: -1 },  // up
+      { dx: -1, dy:  0 },  // left
+      { dx:  0, dy:  1 },  // down
+      { dx:  1, dy:  0 },  // right
+    ];
+
+    const { row, col } = ghost.tile;
+    const reverseDir   = { dx: -ghost.dir.dx, dy: -ghost.dir.dy };
+
+    // Collect all forward-valid exits (no reversals)
+    const forwardDirs = [];
+    for (const dir of DIRS) {
+      if (dir.dx === reverseDir.dx && dir.dy === reverseDir.dy) continue;
+      if (this._canGhostMoveTo(row + dir.dy, col + dir.dx, ghost)) {
+        forwardDirs.push(dir);
+      }
+    }
+
+    if (forwardDirs.length > 0) {
+      // Pick randomly from valid forward exits
+      return forwardDirs[Math.floor(Math.random() * forwardDirs.length)];
+    }
+
+    // Dead end — allow reversing as a last resort
+    const nr = row + reverseDir.dy;
+    const nc = col + reverseDir.dx;
+    if (this._canGhostMoveTo(nr, nc, ghost)) return reverseDir;
+
+    return null;  // completely boxed in (should not happen in this maze)
+  }
+
+  // ---------------------------------------------------------------------------
+  // _eatGhost – handles Pac-Man consuming a frightened ghost.
+  //   Awards points using the current multiplier (200, 400, 800, 1600…),
+  //   doubles the multiplier for the next ghost eaten this cycle,
+  //   teleports the ghost back to its starting position, and sets it to
+  //   'exiting' so it immediately begins the path back into the maze.
+  //
+  //   @param {object} ghost  Ghost state object to consume
+  // ---------------------------------------------------------------------------
+  _eatGhost(ghost) {
+    const points = 200 * this.ghostEatMultiplier;
+    this.ghostEatMultiplier *= 2;
+
+    this.score += points;
+    this.scoreText.setText('SCORE  ' + this.score);
+
+    // Teleport ghost back to ghost house start position
+    const { x, y } = this._tileCenter(ghost.startRow, ghost.startCol);
+    ghost.sprite.setPosition(x, y);
+    ghost.tile  = { row: ghost.startRow, col: ghost.startCol };
+    ghost.dir   = { dx: 0, dy: 0 };
+
+    // 'exiting' causes the ghost to navigate out of the house normally;
+    // speed is restored immediately so it re-enters the maze at full speed
+    ghost.state = 'exiting';
+    ghost.speed = ghost.baseSpeed;
+  }
+
+  // ---------------------------------------------------------------------------
+  // _updateGhostVisuals – called every frame to sync each ghost sprite to the
+  //   correct texture for its current state.
+  //   • Normal states (scatter/chase/exiting/waiting) → original named texture
+  //   • Frightened with > FRIGHTENED_FLASH_START ms remaining → ghost_frightened
+  //   • Frightened with ≤ FRIGHTENED_FLASH_START ms remaining → alternates
+  //     ghost_frightened / ghost_flash at ~4 Hz (every 250 ms)
+  //
+  //   @param {number} time  Current scene timestamp in ms
+  // ---------------------------------------------------------------------------
+  _updateGhostVisuals(time) {
+    for (const ghost of this.ghosts) {
+      if (ghost.state !== 'frightened') {
+        ghost.sprite.setTexture(ghost.name);
+        continue;
+      }
+
+      const remaining = this.frightenedEndTime - time;
+      if (remaining > FRIGHTENED_FLASH_START) {
+        // Solid blue
+        ghost.sprite.setTexture('ghost_frightened');
+      } else {
+        // Flash between blue and white every 250 ms
+        const flashKey = Math.floor(time / 250) % 2 === 0
+          ? 'ghost_frightened'
+          : 'ghost_flash';
+        ghost.sprite.setTexture(flashKey);
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------------------
   // _canGhostMoveTo – returns true if a ghost can enter the tile at (row, col).
   //   TILE.WALL is always impassable.
   //   TILE.GHOST_HOUSE is only passable while the ghost's state is 'exiting'.
@@ -864,16 +1056,20 @@ class GameScene extends Phaser.Scene {
     const pacRow = Math.floor((this.pac.y - HUD_HEIGHT) / TILE_SIZE);
 
     for (const ghost of this.ghosts) {
-      // Ghosts still inside or leaving the house cannot hurt Pac-Man
+      if (ghost.tile.row !== pacRow || ghost.tile.col !== pacCol) continue;
+
+      if (ghost.state === 'frightened') {
+        // Pac-Man eats the frightened ghost — score and reset it to the house
+        this._eatGhost(ghost);
+        // Do NOT return — Pac-Man can eat multiple ghosts on the same tile
+        continue;
+      }
+
+      // Only active maze ghosts can kill Pac-Man
       if (ghost.state !== 'scatter' && ghost.state !== 'chase') continue;
 
-      // Milestone 6 hook: frightened ghosts will be handled here instead
-      // if (ghost.state === 'frightened') { ... continue; }
-
-      if (ghost.tile.row === pacRow && ghost.tile.col === pacCol) {
-        this.handlePlayerDeath();
-        return;  // one death per frame — stop checking remaining ghosts
-      }
+      this.handlePlayerDeath();
+      return;  // one death per frame — stop checking remaining ghosts
     }
   }
 
@@ -936,6 +1132,9 @@ class GameScene extends Phaser.Scene {
       ghost.state = ghost.exitDelay === 0 ? 'scatter' : 'waiting';
     }
 
+    // Cancel any active frightened mode — a death/respawn ends it immediately
+    this._endFrightened();
+
     // Restart the scatter/chase cycle and ghost exit timers from now
     const now          = this.time.now;
     this.gameStartTime = now;
@@ -978,6 +1177,11 @@ class GameScene extends Phaser.Scene {
     // Award points and refresh the HUD
     this.score += (type === TILE.PELLET) ? 50 : 10;
     this.scoreText.setText('SCORE  ' + this.score);
+
+    // Power pellet — activate frightened mode for all active ghosts
+    if (type === TILE.PELLET) {
+      this._activateFrightened(this.time.now);
+    }
   }
 }
 
