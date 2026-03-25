@@ -890,6 +890,12 @@ class GameScene extends Phaser.Scene {
 
     this.dying = true;  // freeze update loop immediately
 
+    // Stop Pac-Man instantly — clear velocity and queued directions so the
+    // physics body doesn't drift between this frame and the next update tick.
+    this.pac.setVelocity(0, 0);
+    this.pacDir    = { dx: 0, dy: 0 };
+    this.queuedDir = null;
+
     this.lives -= 1;
     this.livesText.setText('LIVES  ' + this.lives);
 
