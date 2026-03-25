@@ -12,6 +12,18 @@ const ROWS = 31;
 /** Pixels reserved above the maze for the score HUD */
 const HUD_HEIGHT = 40;
 
+/** Column ghosts navigate to when exiting the ghost house */
+const GHOST_EXIT_COL = 13;
+
+/** Row ghosts must reach to be considered fully outside the ghost house */
+const GHOST_EXIT_ROW = 11;
+
+/** Scatter phase duration in ms — classic Level 1 timing */
+const SCATTER_DURATION = 7000;
+
+/** Chase phase duration in ms — classic Level 1 timing */
+const CHASE_DURATION = 20000;
+
 /** Tile type identifiers — used throughout all scenes */
 const TILE = {
   WALL:        0,
@@ -32,11 +44,15 @@ const TILE = {
 //  2 = power pellet    large collectible, makes ghosts frightened
 //  3 = empty           open corridor, no item
 //  4 = ghost house     ghost starting area interior
+//
+// ORIGINAL_TILEMAP is the immutable source of truth — never written to.
+// TILEMAP is a per-game deep copy created in GameScene.create(); all dot/pellet
+// removal mutates only TILEMAP so replaying restores a fresh copy.
 // =============================================================================
 // Accurate classic Pac-Man tilemap - 28 columns x 31 rows
 // Mapped tile-by-tile from the original 1980 Namco arcade maze
 // 0=wall, 1=dot, 2=power pellet, 3=empty, 4=ghost house
-const TILEMAP = [
+const ORIGINAL_TILEMAP = [
   [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
   [0,1,1,1,1,1,1,1,1,1,1,1,1,0,0,1,1,1,1,1,1,1,1,1,1,1,1,0],
   [0,1,0,0,0,0,1,0,0,0,0,0,1,0,0,1,0,0,0,0,0,1,0,0,0,0,1,0],
@@ -69,6 +85,10 @@ const TILEMAP = [
   [0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0],
   [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
 ];
+
+// Working copy — assigned a fresh deep copy at the start of every GameScene.
+// All in-game tile mutations (eating dots/pellets) target this variable only.
+let TILEMAP = [];
 
 // =============================================================================
 // GAME SCENE
@@ -111,12 +131,109 @@ class GameScene extends Phaser.Scene {
     ctx2.arc(size / 2, size / 2, r, 0, Math.PI * 2);
     ctx2.fill();
     c2.refresh();
+
+    // Ghost sprites — one canvas texture per ghost, all 30×30
+    const ghostDefs = [
+      { key: 'blinky', color: '#ff0000' },
+      { key: 'pinky',  color: '#ffb8ff' },
+      { key: 'inky',   color: '#00ffff' },
+      { key: 'clyde',  color: '#ffb852' },
+    ];
+    for (const gd of ghostDefs) {
+      const gc  = this.textures.createCanvas(gd.key, size, size);
+      const gctx = gc.getContext();
+      this._drawGhostTexture(gctx, gd.color, size);
+      gc.refresh();
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // _drawGhostTexture – draws a classic Pac-Man ghost shape onto a 2D canvas.
+  //
+  // Shape construction (all coordinates relative to the size×size canvas):
+  //   1. DOME  – a semicircle arcs across the full top of the sprite.
+  //              Arc center sits at (cx, domeR) so the topmost point grazes y=0.
+  //   2. SIDES – straight vertical lines descend from the dome's left/right
+  //              edges down to bodyBottom.
+  //   3. SKIRT – 3 scallops drawn as a zigzag (no curves, no recursion):
+  //              alternating DOWN-peaks (scallop valleys) and UP-peaks back to
+  //              bodyBottom; one valley at each third of the ghost width.
+  //              closePath() closes the left side back to the dome edge.
+  //   4. EYES  – two white filled circles with dark pupils in the dome's
+  //              upper region, each pupil shifted slightly inward and down
+  //              to give the classic "googly" look.
+  //
+  // @param {CanvasRenderingContext2D} ctx   Canvas context to draw on
+  // @param {string}                  color CSS color string for the ghost body
+  // @param {number}                  size  Canvas width and height in px
+  // ---------------------------------------------------------------------------
+  _drawGhostTexture(ctx, color, size) {
+    const cx         = size / 2;           // horizontal center        = 15
+    const domeR      = size / 2 - 1;       // dome semicircle radius   = 14
+    const domeY      = domeR;              // dome arc center Y        = 14
+    const bodyBottom = Math.round(size * 0.73); // straight sides end  ≈ 22
+    const scalpTip   = size - 1;           // scallop valley depth     = 29
+    const scalpStep  = size / 3;           // one scallop width        = 10
+
+    // --- Body ---
+    ctx.fillStyle = color;
+    ctx.beginPath();
+
+    // Dome: semicircle from left edge (cx-domeR, domeY) to right edge
+    ctx.moveTo(cx - domeR, domeY);
+    ctx.arc(cx, domeY, domeR, Math.PI, 0, false);  // ends at (cx+domeR, domeY)
+
+    // Right side: straight down to bodyBottom
+    ctx.lineTo(cx + domeR, bodyBottom);
+
+    // Skirt: 3 zigzag scallops from right → left
+    //   odd points dip DOWN to scalpTip, even points rise back to bodyBottom
+    ctx.lineTo(cx + domeR - scalpStep * 0.5, scalpTip);   // right valley  x≈24
+    ctx.lineTo(cx + domeR - scalpStep,       bodyBottom);  // rise          x≈19
+    ctx.lineTo(cx,                           scalpTip);    // mid valley    x=15
+    ctx.lineTo(cx - domeR + scalpStep,       bodyBottom);  // rise          x≈11
+    ctx.lineTo(cx - domeR + scalpStep * 0.5, scalpTip);   // left valley   x≈6
+    ctx.lineTo(cx - domeR,                   bodyBottom);  // final rise    x=1
+
+    // closePath draws the left side straight up to the dome edge
+    ctx.closePath();
+    ctx.fill();
+
+    // --- Eyes ---
+    const eyeY    = Math.round(domeY * 0.65); // upper dome region     ≈ y=9
+    const eyeOffX = size * 0.2;               // offset from center    = 6
+    const eyeR    = size * 0.13;              // white circle radius   ≈ 3.9
+    const pupilR  = eyeR * 0.55;             // pupil radius          ≈ 2.1
+
+    // Left eye
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.arc(cx - eyeOffX, eyeY, eyeR, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#000033';
+    ctx.beginPath();
+    ctx.arc(cx - eyeOffX + 1, eyeY + 1, pupilR, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Right eye
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.arc(cx + eyeOffX, eyeY, eyeR, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#000033';
+    ctx.beginPath();
+    ctx.arc(cx + eyeOffX + 1, eyeY + 1, pupilR, 0, Math.PI * 2);
+    ctx.fill();
   }
 
   // ---------------------------------------------------------------------------
   // create – called once when the scene starts; draws the static maze
   // ---------------------------------------------------------------------------
   create() {
+    // Reset the mutable tilemap from the immutable source so every new game
+    // (including Play Again restarts) begins with a full set of dots/pellets.
+    TILEMAP = ORIGINAL_TILEMAP.map(row => [...row]);
+
     const gfx = this.add.graphics();
     const PATH_SIZE = 35;  // black squares on path tiles, larger than TILE_SIZE
     const pathOffset = (PATH_SIZE - TILE_SIZE) / 2;  // 2.5px overhang on each side
@@ -177,12 +294,22 @@ class GameScene extends Phaser.Scene {
       }
     }
 
+    // Ghost sprites — spawned before Pac-Man so he renders on top
+    this._createGhosts();
+
     // Pac-Man sprite and keyboard input
     this._createPacman();
     this._setupInput();
 
     // Score counter — starts at zero, updated by _checkEatDot each frame
     this.score = 0;
+
+    // Lives — read from config; decremented by handlePlayerDeath each death
+    const cfg    = this.registry.get('gameConfig');
+    this.lives   = cfg ? (cfg.lives ?? 3) : 3;
+
+    // Death flag — while true the update loop is frozen (1-second respawn pause)
+    this.dying = false;
 
     // HUD – score display in the top strip above the maze (added last so it
     // renders on top of everything including Pac-Man)
@@ -191,6 +318,13 @@ class GameScene extends Phaser.Scene {
       color: '#ffffff',
       fontFamily: 'monospace',
     });
+
+    // HUD – lives display, right-aligned in the same strip
+    this.livesText = this.add.text(COLS * TILE_SIZE - 10, 10, 'LIVES  ' + this.lives, {
+      fontSize: '18px',
+      color: '#ffffff',
+      fontFamily: 'monospace',
+    }).setOrigin(1, 0);
   }
 
   // ---------------------------------------------------------------------------
@@ -239,12 +373,19 @@ class GameScene extends Phaser.Scene {
   }
 
   // ---------------------------------------------------------------------------
-  // update – main game loop tick
+  // update – main game loop tick.
+  //   Returns early while this.dying is true so that the 1-second respawn
+  //   pause freezes all movement and collision without stopping the scene.
   // ---------------------------------------------------------------------------
   update(time, delta) {
+    if (this.dying) return;
+
     this._handleMovement();
     this._checkEatDot();
     this._updatePacVisual(time);
+    this._updateGhostMode(time);
+    this._updateGhosts(time, delta);
+    this._checkGhostCollision();
   }
 
   // ---------------------------------------------------------------------------
@@ -418,6 +559,387 @@ class GameScene extends Phaser.Scene {
   }
 
   // ---------------------------------------------------------------------------
+  // _createGhosts – spawns 4 ghost sprites in / near the ghost house.
+  //
+  //   Blinky (red)    – starts at row 11 (just above the house), scatter mode.
+  //   Pinky  (pink)   – starts inside the house; exits after 3 s.
+  //   Inky   (cyan)   – starts inside the house; exits after 6 s.
+  //   Clyde  (orange) – starts inside the house; exits after 9 s.
+  //
+  //   Each ghost is a 16×16 colored rectangle — full art is v2 polish.
+  //   Speed reads from gameConfig.ghostSpeed so the config slider works.
+  // ---------------------------------------------------------------------------
+  _createGhosts() {
+    const cfg        = this.registry.get('gameConfig');
+    const ghostSpeed = 60 * (cfg ? cfg.ghostSpeed : 1);  // px / s, ~3 tiles/s at 1×
+
+    const defs = [
+      {
+        name: 'blinky', color: 0xff0000,
+        scatterTarget: { row: 0,        col: COLS - 1 },
+        startRow: 11,   startCol: 13,   exitDelay: 0,
+      },
+      {
+        name: 'pinky',  color: 0xffb8ff,
+        scatterTarget: { row: 0,        col: 0        },
+        startRow: 14,   startCol: 13,   exitDelay: 3000,
+      },
+      {
+        name: 'inky',   color: 0x00ffff,
+        scatterTarget: { row: ROWS - 1, col: COLS - 1 },
+        startRow: 14,   startCol: 11,   exitDelay: 6000,
+      },
+      {
+        name: 'clyde',  color: 0xffb852,
+        scatterTarget: { row: ROWS - 1, col: 0        },
+        startRow: 14,   startCol: 15,   exitDelay: 9000,
+      },
+    ];
+
+    this.ghosts = defs.map(def => {
+      const { x, y } = this._tileCenter(def.startRow, def.startCol);
+      // Classic ghost sprite drawn as a canvas texture in preload()
+      const sprite = this.add.image(x, y, def.name);
+
+      return {
+        name:          def.name,
+        color:         def.color,
+        sprite:        sprite,
+        tile:          { row: def.startRow, col: def.startCol },
+        dir:           { dx: 0, dy: 0 },
+        // Blinky exits immediately; others wait for their staggered delay
+        state:         def.exitDelay === 0 ? 'scatter' : 'waiting',
+        scatterTarget: def.scatterTarget,
+        speed:         ghostSpeed,
+        exitDelay:     def.exitDelay,
+        // Stored so resetPositions() can teleport ghosts back to their origins
+        startRow:      def.startRow,
+        startCol:      def.startCol,
+      };
+    });
+
+    // Global scatter / chase mode — scatter starts first
+    this.ghostMode     = 'scatter';
+    this.gameStartTime = -1;  // captured on the first update() tick
+    this.modeStartTime = -1;  // captured on the first update() tick
+  }
+
+  // ---------------------------------------------------------------------------
+  // _updateGhostMode – drives the global scatter ↔ chase cycle each frame.
+  //   On the first call it records the scene start time.  It then checks
+  //   whether the current mode duration has expired and flips the mode if so.
+  //   Every ghost already in the maze (state 'scatter' or 'chase') is updated
+  //   to the new mode so they re-target immediately.
+  // ---------------------------------------------------------------------------
+  _updateGhostMode(time) {
+    // Capture start time once on the first tick
+    if (this.gameStartTime < 0) {
+      this.gameStartTime = time;
+      this.modeStartTime = time;
+      return;
+    }
+
+    const elapsed      = time - this.modeStartTime;
+    const modeDuration = this.ghostMode === 'scatter' ? SCATTER_DURATION : CHASE_DURATION;
+
+    if (elapsed < modeDuration) return;  // still within current phase
+
+    // Flip mode and restart the phase clock
+    this.ghostMode     = this.ghostMode === 'scatter' ? 'chase' : 'scatter';
+    this.modeStartTime = time;
+
+    // Propagate new mode to ghosts already moving in the maze
+    for (const ghost of this.ghosts) {
+      if (ghost.state === 'scatter' || ghost.state === 'chase') {
+        ghost.state = this.ghostMode;
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // _updateGhosts – per-frame ghost loop.
+  //   Promotes any 'waiting' ghost to 'exiting' once its exit delay has passed,
+  //   then calls _moveGhost for every ghost that is not still waiting.
+  // ---------------------------------------------------------------------------
+  _updateGhosts(time, delta) {
+    for (const ghost of this.ghosts) {
+      if (ghost.state === 'waiting') {
+        if (time - this.gameStartTime < ghost.exitDelay) continue;  // not yet
+        ghost.state = 'exiting';  // time to leave the house
+      }
+
+      this._moveGhost(ghost, delta);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // _moveGhost – advances one ghost toward its current target tile.
+  //   Locks the perpendicular axis each frame to prevent sub-pixel drift, then
+  //   moves the sprite by speed × delta along the current direction.
+  //   When the ghost reaches the target tile centre (within SNAP px) it snaps
+  //   exactly, calls _chooseNextGhostDir for the next move, and advances
+  //   ghost.tile.  Handles horizontal tunnel wrap identically to Pac-Man.
+  // ---------------------------------------------------------------------------
+  _moveGhost(ghost, delta) {
+    const SNAP = 4;  // px — within this distance counts as "at tile centre"
+    const spr  = ghost.sprite;
+    const { x: tx, y: ty } = this._tileCenter(ghost.tile.row, ghost.tile.col);
+
+    // Lock the perpendicular axis to prevent drift over many frames
+    if (ghost.dir.dx !== 0) spr.y = ty;
+    if (ghost.dir.dy !== 0) spr.x = tx;
+
+    // Advance along current direction
+    spr.x += ghost.dir.dx * ghost.speed * (delta / 1000);
+    spr.y += ghost.dir.dy * ghost.speed * (delta / 1000);
+
+    // Horizontal tunnel wrap
+    if      (spr.x < 0)               spr.x = COLS * TILE_SIZE;
+    else if (spr.x > COLS * TILE_SIZE) spr.x = 0;
+
+    // Snap check: close enough to target tile centre?
+    const nearCenter = Math.abs(spr.x - tx) <= SNAP &&
+                       Math.abs(spr.y - ty) <= SNAP;
+
+    if (!nearCenter) return;
+
+    // Lock to exact tile centre, then pick next direction
+    spr.x = tx;
+    spr.y = ty;
+
+    const nextDir = this._chooseNextGhostDir(ghost);
+    if (!nextDir) { ghost.dir = { dx: 0, dy: 0 }; return; }
+
+    const nr = ghost.tile.row + nextDir.dy;
+    const nc = ghost.tile.col + nextDir.dx;
+
+    // Safety check — direction must lead to a passable tile
+    if (!this._canGhostMoveTo(nr, nc, ghost)) {
+      ghost.dir = { dx: 0, dy: 0 };
+      return;
+    }
+
+    ghost.dir  = nextDir;
+    ghost.tile = {
+      row: ((nr % ROWS) + ROWS) % ROWS,
+      col: ((nc % COLS) + COLS) % COLS,
+    };
+  }
+
+  // ---------------------------------------------------------------------------
+  // _chooseNextGhostDir – dispatcher that returns the next direction for a
+  //   ghost at its current tile.
+  //   Exiting ghosts are routed through _exitingDir; all others use
+  //   _chooseDirToward with the mode-appropriate target tile.
+  // ---------------------------------------------------------------------------
+  _chooseNextGhostDir(ghost) {
+    if (ghost.state === 'exiting') {
+      return this._exitingDir(ghost);
+    }
+    const target = this._getGhostTarget(ghost);
+    return this._chooseDirToward(ghost, target.row, target.col);
+  }
+
+  // ---------------------------------------------------------------------------
+  // _exitingDir – computes the next move for a ghost leaving the ghost house.
+  //   Uses a simple two-step iterative rule (no recursion):
+  //     1. Move horizontally until aligned with GHOST_EXIT_COL.
+  //     2. Move up until reaching GHOST_EXIT_ROW.
+  //     3. On arrival, transition the ghost to the current global mode.
+  // ---------------------------------------------------------------------------
+  _exitingDir(ghost) {
+    const { row, col } = ghost.tile;
+
+    // Step 1: reach the exit column
+    if (col < GHOST_EXIT_COL) return { dx:  1, dy: 0 };
+    if (col > GHOST_EXIT_COL) return { dx: -1, dy: 0 };
+
+    // Step 2: move up to the exit row
+    if (row > GHOST_EXIT_ROW) return { dx: 0, dy: -1 };
+
+    // Step 3: fully exited — join the global scatter / chase mode
+    ghost.state = this.ghostMode;
+    const target = this._getGhostTarget(ghost);
+    return this._chooseDirToward(ghost, target.row, target.col);
+  }
+
+  // ---------------------------------------------------------------------------
+  // _getGhostTarget – returns the {row, col} tile a ghost should navigate to.
+  //   scatter → the ghost's pre-assigned corner tile
+  //   chase   → Pac-Man's current tile (derived from his pixel position)
+  // ---------------------------------------------------------------------------
+  _getGhostTarget(ghost) {
+    if (ghost.state === 'scatter') {
+      return ghost.scatterTarget;
+    }
+    // Chase: target the tile Pac-Man currently occupies
+    const pacCol = Math.floor(this.pac.x / TILE_SIZE);
+    const pacRow = Math.floor((this.pac.y - HUD_HEIGHT) / TILE_SIZE);
+    return { row: pacRow, col: pacCol };
+  }
+
+  // ---------------------------------------------------------------------------
+  // _chooseDirToward – picks the direction that minimises squared Euclidean
+  //   distance from the adjacent tile to (targetRow, targetCol).
+  //
+  //   Classic Pac-Man AI rules (all applied iteratively — no recursion):
+  //     • Ghosts cannot reverse 180° while another passable direction exists.
+  //     • Cannot enter TILE.WALL tiles.
+  //     • Can only enter TILE.GHOST_HOUSE while state === 'exiting'.
+  //     • Ties broken by direction priority: up > left > down > right.
+  // ---------------------------------------------------------------------------
+  _chooseDirToward(ghost, targetRow, targetCol) {
+    // Classic tie-breaking priority order (up, left, down, right)
+    const DIRS = [
+      { dx:  0, dy: -1 },  // up
+      { dx: -1, dy:  0 },  // left
+      { dx:  0, dy:  1 },  // down
+      { dx:  1, dy:  0 },  // right
+    ];
+
+    const { row, col } = ghost.tile;
+    const reverseDir   = { dx: -ghost.dir.dx, dy: -ghost.dir.dy };
+
+    let bestDir  = null;
+    let bestDist = Infinity;
+
+    // First pass: consider all directions except a direct 180° reversal
+    for (const dir of DIRS) {
+      if (dir.dx === reverseDir.dx && dir.dy === reverseDir.dy) continue;
+
+      const nr = row + dir.dy;
+      const nc = col + dir.dx;
+      if (!this._canGhostMoveTo(nr, nc, ghost)) continue;
+
+      // Squared distance — no sqrt needed for relative comparison
+      const dr   = nr - targetRow;
+      const dc   = nc - targetCol;
+      const dist = dr * dr + dc * dc;
+
+      if (dist < bestDist) {
+        bestDist = dist;
+        bestDir  = dir;
+      }
+    }
+
+    // Second pass: allow reversing only if no other direction was valid
+    if (!bestDir) {
+      const nr = row + reverseDir.dy;
+      const nc = col + reverseDir.dx;
+      if (this._canGhostMoveTo(nr, nc, ghost)) {
+        bestDir = reverseDir;
+      }
+    }
+
+    return bestDir;
+  }
+
+  // ---------------------------------------------------------------------------
+  // _canGhostMoveTo – returns true if a ghost can enter the tile at (row, col).
+  //   TILE.WALL is always impassable.
+  //   TILE.GHOST_HOUSE is only passable while the ghost's state is 'exiting'.
+  //   Columns outside [0, COLS) are tunnel exits — always passable.
+  // ---------------------------------------------------------------------------
+  _canGhostMoveTo(row, col, ghost) {
+    if (col < 0 || col >= COLS) return true;   // horizontal tunnel exits
+    if (row < 0 || row >= ROWS) return false;
+
+    const tile = TILEMAP[row][col];
+    if (tile === TILE.WALL)        return false;
+    if (tile === TILE.GHOST_HOUSE) return ghost.state === 'exiting';
+    return true;
+  }
+
+  // ---------------------------------------------------------------------------
+  // _checkGhostCollision – called every frame after all movement updates.
+  //   Derives Pac-Man's current tile and compares it against every ghost tile.
+  //   Only ghosts in 'scatter' or 'chase' state can hurt Pac-Man — ghosts that
+  //   are still 'waiting' or 'exiting' pass through harmlessly.
+  //   Frightened mode (Milestone 6) will add a branch here on ghost.state.
+  //   Fires handlePlayerDeath() on the first matching ghost and returns early
+  //   so only one death event fires per frame.
+  // ---------------------------------------------------------------------------
+  _checkGhostCollision() {
+    const pacCol = Math.floor(this.pac.x / TILE_SIZE);
+    const pacRow = Math.floor((this.pac.y - HUD_HEIGHT) / TILE_SIZE);
+
+    for (const ghost of this.ghosts) {
+      // Ghosts still inside or leaving the house cannot hurt Pac-Man
+      if (ghost.state !== 'scatter' && ghost.state !== 'chase') continue;
+
+      // Milestone 6 hook: frightened ghosts will be handled here instead
+      // if (ghost.state === 'frightened') { ... continue; }
+
+      if (ghost.tile.row === pacRow && ghost.tile.col === pacCol) {
+        this.handlePlayerDeath();
+        return;  // one death per frame — stop checking remaining ghosts
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // handlePlayerDeath – responds to a Pac-Man / ghost collision.
+  //   Does nothing when invincible mode is enabled in gameConfig.
+  //   Otherwise: freezes the update loop, decrements lives, then either
+  //   transitions to GameOverScene (lives exhausted) or schedules a 1-second
+  //   pause before resetPositions() restores starting state.
+  // ---------------------------------------------------------------------------
+  handlePlayerDeath() {
+    const cfg = this.registry.get('gameConfig');
+    if (cfg && cfg.invincible) return;  // invincible mode — skip death entirely
+
+    this.dying = true;  // freeze update loop immediately
+
+    this.lives -= 1;
+    this.livesText.setText('LIVES  ' + this.lives);
+
+    if (this.lives <= 0) {
+      // No lives left — hand off to the Game Over screen with final score
+      this.scene.start('GameOverScene', { score: this.score });
+      return;
+    }
+
+    // Still have lives — brief pause, then reset positions and resume
+    this.time.delayedCall(1000, () => { this.resetPositions(); });
+  }
+
+  // ---------------------------------------------------------------------------
+  // resetPositions – teleports Pac-Man and all ghosts back to their starting
+  //   tiles without touching the score or the tilemap (eaten dots stay gone).
+  //   Resets all movement state and restarts the scatter/chase timing cycle.
+  //   Clears this.dying at the end to re-enable the update loop.
+  // ---------------------------------------------------------------------------
+  resetPositions() {
+    // --- Pac-Man ---
+    const PAC_START_ROW = 23;
+    const PAC_START_COL = 13;
+    const { x: px, y: py } = this._tileCenter(PAC_START_ROW, PAC_START_COL);
+
+    this.pac.setPosition(px, py);
+    this.pac.setVelocity(0, 0);
+    this.pacTile   = { row: PAC_START_ROW, col: PAC_START_COL };
+    this.pacDir    = { dx: 0, dy: 0 };
+    this.queuedDir = null;
+
+    // --- Ghosts — teleport each back to its original start tile ---
+    for (const ghost of this.ghosts) {
+      const { x: gx, y: gy } = this._tileCenter(ghost.startRow, ghost.startCol);
+      ghost.sprite.setPosition(gx, gy);
+      ghost.tile  = { row: ghost.startRow, col: ghost.startCol };
+      ghost.dir   = { dx: 0, dy: 0 };
+      ghost.state = ghost.exitDelay === 0 ? 'scatter' : 'waiting';
+    }
+
+    // Restart the scatter/chase cycle and ghost exit timers from now
+    const now          = this.time.now;
+    this.gameStartTime = now;
+    this.modeStartTime = now;
+    this.ghostMode     = 'scatter';
+
+    this.dying = false;  // re-enable the update loop
+  }
+
+  // ---------------------------------------------------------------------------
   // _checkEatDot – called every frame; derives Pac-Man's current tile from his
   //   pixel position and checks whether it holds a dot (type 1) or power pellet
   //   (type 2).  If so:
@@ -450,6 +972,69 @@ class GameScene extends Phaser.Scene {
     // Award points and refresh the HUD
     this.score += (type === TILE.PELLET) ? 50 : 10;
     this.scoreText.setText('SCORE  ' + this.score);
+  }
+}
+
+// =============================================================================
+// GAME OVER SCENE
+// =============================================================================
+
+class GameOverScene extends Phaser.Scene {
+  constructor() {
+    super({ key: 'GameOverScene' });
+  }
+
+  // ---------------------------------------------------------------------------
+  // init – receives data passed from GameScene.scene.start('GameOverScene', …).
+  //   Stores the final score so create() can display it.
+  // ---------------------------------------------------------------------------
+  init(data) {
+    this.finalScore = data.score ?? 0;
+  }
+
+  // ---------------------------------------------------------------------------
+  // create – builds the Game Over screen:
+  //   • "GAME OVER" heading centred in the upper third
+  //   • Final score line below it
+  //   • "PLAY AGAIN" button — clicking it destroys Phaser and restores the
+  //     HTML config panel so the player can start a fresh game.
+  // ---------------------------------------------------------------------------
+  create() {
+    const cx = (COLS * TILE_SIZE) / 2;
+    const cy = (HUD_HEIGHT + ROWS * TILE_SIZE) / 2;
+
+    // "GAME OVER" heading
+    this.add.text(cx, cy - 60, 'GAME OVER', {
+      fontSize:   '40px',
+      color:      '#ff0000',
+      fontFamily: 'monospace',
+      fontStyle:  'bold',
+    }).setOrigin(0.5);
+
+    // Final score
+    this.add.text(cx, cy, 'SCORE  ' + this.finalScore, {
+      fontSize:   '24px',
+      color:      '#ffffff',
+      fontFamily: 'monospace',
+    }).setOrigin(0.5);
+
+    // "Play Again" button — interactive Phaser text object
+    const btn = this.add.text(cx, cy + 60, 'PLAY AGAIN', {
+      fontSize:   '22px',
+      color:      '#ffff00',
+      fontFamily: 'monospace',
+    }).setOrigin(0.5).setInteractive({ useHandCursor: true });
+
+    // Hover feedback — brighten / dim on pointer over / out
+    btn.on('pointerover',  () => btn.setColor('#ffffff'));
+    btn.on('pointerout',   () => btn.setColor('#ffff00'));
+
+    // Click: destroy Phaser and show the HTML config panel again
+    btn.on('pointerdown', () => {
+      window.phaserGame.destroy(true);
+      document.getElementById('game-container').style.display = 'none';
+      document.getElementById('config-panel').style.display  = 'block';
+    });
   }
 }
 
@@ -511,7 +1096,7 @@ function startGame() {
       default: 'arcade',
       arcade:  { debug: false },
     },
-    scene:           [GameScene],
+    scene:           [GameScene, GameOverScene],
   };
 
   // Create the Phaser game instance and keep a reference for later
