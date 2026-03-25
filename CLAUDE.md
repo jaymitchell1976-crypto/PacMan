@@ -1,5 +1,7 @@
 # Pac-Man — Project Rules & Reference
 
+URL: https://pac-man-wheat-gamma.vercel.app/
+
 ## Project Overview
 Configurable Pac-Man clone built in Phaser 3. The player can tune speed, scale, lives, and invincibility via an HTML config panel before each game. Development proceeds in milestones; each milestone layers on top of the last without replacing prior systems.
 
