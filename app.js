@@ -251,6 +251,88 @@ class GameScene extends Phaser.Scene {
     // (including Play Again restarts) begins with a full set of dots/pellets.
     TILEMAP = ORIGINAL_TILEMAP.map(row => [...row]);
 
+    // ---------------------------------------------------------------------------
+    // Adjust power pellet count — reads gameConfig.pellets and either:
+    //   • Downgrades excess TILE.PELLET → TILE.DOT  (wanted < existing)
+    //   • Upgrades TILE.DOT → TILE.PELLET            (wanted > existing)
+    //
+    // For upgrades, candidates are scored by minimum tile-distance to any
+    // existing pellet: tiles ≥ 5 away are preferred to spread extras around
+    // the maze.  If not enough spaced candidates exist, any dot will do.
+    // The maximum is capped at available dot tiles — can't exceed maze supply.
+    // ORIGINAL_TILEMAP is never touched; only the fresh TILEMAP copy is
+    // mutated here, before the rendering loop runs.
+    // ---------------------------------------------------------------------------
+    {
+      const pelletCfg     = this.registry.get('gameConfig');
+      const wantedPellets = pelletCfg ? (pelletCfg.pellets ?? 4) : 4;
+
+      // Collect current pellet positions
+      const pelletPositions = [];
+      for (let r = 0; r < ROWS; r++) {
+        for (let c = 0; c < COLS; c++) {
+          if (TILEMAP[r][c] === TILE.PELLET) pelletPositions.push([r, c]);
+        }
+      }
+
+      if (wantedPellets < pelletPositions.length) {
+        // Downgrade excess pellets to dots (from end of list = deterministic)
+        for (let i = wantedPellets; i < pelletPositions.length; i++) {
+          const [r, c] = pelletPositions[i];
+          TILEMAP[r][c] = TILE.DOT;
+        }
+
+      } else if (wantedPellets > pelletPositions.length) {
+        // Upgrade dot tiles to pellets using greedy farthest-insertion:
+        // pick the dot that is furthest from ALL confirmed pellets, promote it,
+        // then re-score remaining candidates against the updated pellet set.
+        // This guarantees each new pellet is maximally spaced from all others.
+
+        // confirmed starts as a copy so we can extend it without mutating
+        // pelletPositions (which the downgrade branch still references above).
+        const confirmed = pelletPositions.slice();
+
+        // Build candidate list — [row, col] for every current dot tile
+        const dotCandidates = [];
+        for (let r = 0; r < ROWS; r++) {
+          for (let c = 0; c < COLS; c++) {
+            if (TILEMAP[r][c] === TILE.DOT) dotCandidates.push([r, c]);
+          }
+        }
+
+        // Helper: Chebyshev distance from (r,c) to its nearest confirmed pellet
+        const minDistTo = (r, c) => {
+          let best = Infinity;
+          for (const [pr, pc] of confirmed) {
+            const d = Math.max(Math.abs(r - pr), Math.abs(c - pc));
+            if (d < best) best = d;
+          }
+          return best;
+        };
+
+        const needed = Math.min(wantedPellets - pelletPositions.length, dotCandidates.length);
+        for (let i = 0; i < needed; i++) {
+          // Find the candidate with the greatest minimum distance to confirmed pellets
+          let bestIdx = 0;
+          let bestDist = -1;
+          for (let j = 0; j < dotCandidates.length; j++) {
+            const [r, c] = dotCandidates[j];
+            const d = minDistTo(r, c);
+            if (d > bestDist) { bestDist = d; bestIdx = j; }
+          }
+
+          // Promote the winner and add to confirmed set
+          const [r, c] = dotCandidates[bestIdx];
+          TILEMAP[r][c] = TILE.PELLET;
+          confirmed.push([r, c]);
+
+          // Remove winner from candidates (swap-with-last for O(1) removal)
+          dotCandidates[bestIdx] = dotCandidates[dotCandidates.length - 1];
+          dotCandidates.pop();
+        }
+      }
+    }
+
     const gfx = this.add.graphics();
     const PATH_SIZE = 35;  // black squares on path tiles, larger than TILE_SIZE
     const pathOffset = (PATH_SIZE - TILE_SIZE) / 2;  // 2.5px overhang on each side
@@ -1277,16 +1359,32 @@ class GameOverScene extends Phaser.Scene {
 // CONFIG PANEL – live label sync for range sliders
 // =============================================================================
 
-/** Update the ghost-speed readout whenever the slider moves */
+/**
+ * syncSpeedSliders – keeps ghostSpeed and pacSpeed sliders locked together.
+ * @param {string} value – the new numeric string value from whichever slider moved.
+ * A guard flag (`_syncingSpeed`) prevents the programmatic `.value` assignment
+ * from re-firing this function and causing an infinite loop.
+ */
+let _syncingSpeed = false;
+function syncSpeedSliders(value) {
+  if (_syncingSpeed) return;
+  _syncingSpeed = true;
+  const label = parseFloat(value).toFixed(1) + '×';
+  document.getElementById('ghostSpeed').value    = value;
+  document.getElementById('pacSpeed').value      = value;
+  document.getElementById('ghostSpeedVal').textContent = label;
+  document.getElementById('pacSpeedVal').textContent   = label;
+  _syncingSpeed = false;
+}
+
+/** Sync both sliders when ghost speed changes */
 document.getElementById('ghostSpeed').addEventListener('input', function () {
-  document.getElementById('ghostSpeedVal').textContent =
-    parseFloat(this.value).toFixed(1) + '×';
+  syncSpeedSliders(this.value);
 });
 
-/** Update the Pac-Man-speed readout whenever the slider moves */
+/** Sync both sliders when Pac-Man speed changes */
 document.getElementById('pacSpeed').addEventListener('input', function () {
-  document.getElementById('pacSpeedVal').textContent =
-    parseFloat(this.value).toFixed(1) + '×';
+  syncSpeedSliders(this.value);
 });
 
 /** Update the Pac-Man-size readout whenever the slider moves */
