@@ -162,6 +162,41 @@ class GameScene extends Phaser.Scene {
     const gfl = this.textures.createCanvas('ghost_flash', size, size);
     this._drawGhostTexture(gfl.getContext(), '#ffffff', size);
     gfl.refresh();
+
+    // Ghost eyes texture — just the two eyes on a black background; no body.
+    // Displayed when a ghost is in 'returning' state (racing back to the house).
+    // Eye geometry mirrors _drawGhostTexture exactly so the eyes sit in the same
+    // positions relative to the sprite bounds.
+    const ge     = this.textures.createCanvas('ghost_eyes', size, size);
+    const gectx  = ge.getContext();
+    const ecx    = size / 2;
+    const edomeR = size / 2 - 1;
+    const edomeY = edomeR;
+    const eeyeY  = Math.round(edomeY * 0.65);
+    const eeyeOX = size * 0.2;
+    const eeyeR  = size * 0.13;
+    const epupR  = eeyeR * 0.55;
+
+    // Left eye
+    gectx.fillStyle = '#ffffff';
+    gectx.beginPath();
+    gectx.arc(ecx - eeyeOX, eeyeY, eeyeR, 0, Math.PI * 2);
+    gectx.fill();
+    gectx.fillStyle = '#000033';
+    gectx.beginPath();
+    gectx.arc(ecx - eeyeOX + 1, eeyeY + 1, epupR, 0, Math.PI * 2);
+    gectx.fill();
+
+    // Right eye
+    gectx.fillStyle = '#ffffff';
+    gectx.beginPath();
+    gectx.arc(ecx + eeyeOX, eeyeY, eeyeR, 0, Math.PI * 2);
+    gectx.fill();
+    gectx.fillStyle = '#000033';
+    gectx.beginPath();
+    gectx.arc(ecx + eeyeOX + 1, eeyeY + 1, epupR, 0, Math.PI * 2);
+    gectx.fill();
+    ge.refresh();
   }
 
   // ---------------------------------------------------------------------------
@@ -781,6 +816,9 @@ class GameScene extends Phaser.Scene {
   _updateGhosts(time, delta) {
     for (const ghost of this.ghosts) {
       if (ghost.state === 'waiting') {
+        // forcedWaiting is set after a ghost returns to its start tile;
+        // a 500 ms delayedCall will clear it and transition to 'exiting'.
+        if (ghost.forcedWaiting) continue;
         if (time - this.gameStartTime < ghost.exitDelay) continue;  // not yet
         ghost.state = 'exiting';  // time to leave the house
       }
@@ -852,6 +890,7 @@ class GameScene extends Phaser.Scene {
   _chooseNextGhostDir(ghost) {
     if (ghost.state === 'exiting')   return this._exitingDir(ghost);
     if (ghost.state === 'frightened') return this._chooseFrightenedDir(ghost);
+    if (ghost.state === 'returning') return this._returningDir(ghost);
     const target = this._getGhostTarget(ghost);
     return this._chooseDirToward(ghost, target.row, target.col);
   }
@@ -877,6 +916,35 @@ class GameScene extends Phaser.Scene {
     ghost.state = this.ghostMode;
     const target = this._getGhostTarget(ghost);
     return this._chooseDirToward(ghost, target.row, target.col);
+  }
+
+  // ---------------------------------------------------------------------------
+  // _returningDir – drives a ghost in 'returning' state (eyes only) back to
+  //   the ghost house entrance.  On arrival, teleports instantly to start
+  //   position and resets to game-start state (Blinky → scatter, others →
+  //   waiting).  No descent phase, no forcedWaiting timer.
+  //
+  //   @param  {object} ghost  Ghost state object
+  //   @return {object|null}   { dx, dy } next direction, or null on arrival
+  // ---------------------------------------------------------------------------
+  _returningDir(ghost) {
+    const { row, col } = ghost.tile;
+
+    // Arrived at the ghost house entrance — teleport and respawn instantly
+    if (row === GHOST_EXIT_ROW && col === GHOST_EXIT_COL) {
+      const { x, y } = this._tileCenter(ghost.startRow, ghost.startCol);
+      ghost.sprite.setPosition(x, y);
+      ghost.tile          = { row: ghost.startRow, col: ghost.startCol };
+      ghost.dir           = { dx: 0, dy: 0 };
+      ghost.speed         = ghost.baseSpeed;
+      ghost.forcedWaiting = false;
+      // Exactly matches game-start state: Blinky exits immediately, others wait
+      ghost.state         = ghost.exitDelay === 0 ? 'scatter' : 'waiting';
+      return null;
+    }
+
+    // Still in the open maze — navigate toward the entrance
+    return this._chooseDirToward(ghost, GHOST_EXIT_ROW, GHOST_EXIT_COL);
   }
 
   // ---------------------------------------------------------------------------
@@ -1065,16 +1133,11 @@ class GameScene extends Phaser.Scene {
     this.score += points;
     this.scoreText.setText('SCORE  ' + this.score);
 
-    // Teleport ghost back to ghost house start position
-    const { x, y } = this._tileCenter(ghost.startRow, ghost.startCol);
-    ghost.sprite.setPosition(x, y);
-    ghost.tile  = { row: ghost.startRow, col: ghost.startCol };
-    ghost.dir   = { dx: 0, dy: 0 };
-
-    // 'exiting' causes the ghost to navigate out of the house normally;
-    // speed is restored immediately so it re-enters the maze at full speed
-    ghost.state = 'exiting';
-    ghost.speed = ghost.baseSpeed;
+    // Leave the sprite where it is — only the eyes remain, racing home.
+    // Speed is boosted to 1.5× base so the eyes visibly sprint back.
+    ghost.state = 'returning';
+    ghost.speed = ghost.baseSpeed * 1.5;
+    // dir is kept so _moveGhost has a valid heading to continue from this frame
   }
 
   // ---------------------------------------------------------------------------
@@ -1089,6 +1152,12 @@ class GameScene extends Phaser.Scene {
   // ---------------------------------------------------------------------------
   _updateGhostVisuals(time) {
     for (const ghost of this.ghosts) {
+      if (ghost.state === 'returning') {
+        // Eyes-only sprite while the ghost races back to the house
+        ghost.sprite.setTexture('ghost_eyes');
+        continue;
+      }
+
       if (ghost.state !== 'frightened') {
         ghost.sprite.setTexture(ghost.name);
         continue;
@@ -1120,7 +1189,8 @@ class GameScene extends Phaser.Scene {
 
     const tile = TILEMAP[row][col];
     if (tile === TILE.WALL)        return false;
-    if (tile === TILE.GHOST_HOUSE) return ghost.state === 'exiting';
+    // 'exiting' ghosts leave the house; 'returning' ghosts re-enter it
+    if (tile === TILE.GHOST_HOUSE) return ghost.state === 'exiting' || ghost.state === 'returning';
     return true;
   }
 
@@ -1209,9 +1279,11 @@ class GameScene extends Phaser.Scene {
     for (const ghost of this.ghosts) {
       const { x: gx, y: gy } = this._tileCenter(ghost.startRow, ghost.startCol);
       ghost.sprite.setPosition(gx, gy);
-      ghost.tile  = { row: ghost.startRow, col: ghost.startCol };
-      ghost.dir   = { dx: 0, dy: 0 };
-      ghost.state = ghost.exitDelay === 0 ? 'scatter' : 'waiting';
+      ghost.tile          = { row: ghost.startRow, col: ghost.startCol };
+      ghost.dir           = { dx: 0, dy: 0 };
+      ghost.state         = ghost.exitDelay === 0 ? 'scatter' : 'waiting';
+      ghost.speed         = ghost.baseSpeed;   // restore from returning (1.5×) or frightened (0.5×)
+      ghost.forcedWaiting = false;             // clear any pending return-pause
     }
 
     // Cancel any active frightened mode — a death/respawn ends it immediately
